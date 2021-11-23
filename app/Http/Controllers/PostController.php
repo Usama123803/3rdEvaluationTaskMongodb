@@ -3,9 +3,9 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\Post;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
+use MongoDB\Client as chota;
 
 class PostController extends Controller
 {
@@ -16,14 +16,22 @@ class PostController extends Controller
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
 
-        $post = new Post;
-        $post->user_id      = $userID;
-        $post->title        = $request->title;
-        $post->description  = $request->description;
-        $post->digital_data = $request->file('digital_data')->store('folderForFile');
-        $create = $post->save();
+        //Connection
+        $query = (new chota())->SocialAppMongo->Posts;
+
+        $encode = json_encode($userID);
+        $decoded = json_decode($encode, true);
+        $id = $decoded['$oid'];
+
+        //Add post
+        $add_post = $query->insertOne([
+            'user_id' => $id,
+            'title'   => $request->title,
+            'description'  => $request->description,
+            'digital_data'   => $request->file('digital_data')->store('folderForFile')
+        ]);
         
-        if($create){
+        if($add_post){
             return response([
                 'status'  => 200,
                 'message' => 'Post Ceated'
@@ -43,7 +51,23 @@ class PostController extends Controller
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
 
-        return Post::all()->where('user_id',$userID);
+        $encode = json_encode($userID);
+        $decode = json_decode($encode, true);
+        $id = $decode['$oid'];
+
+        $query = (new chota())->SocialAppMongo->Posts;
+        $show_post = $query->find(['user_id' => $id]);
+        if ($show_post == null) {
+            return response([
+                'Status'  => '200',
+                'message' => 'Posts Not Found',
+            ], 200);
+        } else {
+            return response([
+                'Status' => '200',
+                'Data'   => $show_post->toArray(),
+            ], 200);
+        }
     }
 
     public function update(Request $request , $id)
@@ -53,26 +77,39 @@ class PostController extends Controller
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
 
-        $post = Post::where('user_id',$userID)->where('id',$id)->first();
-        // $post->id           = $request->id;
-        // $post->user_id      = $userID;
-        // $post->title        = $request->title;
-        // $post->description  = $request->description;
-        // $post->digital_data = $request->file('digital_data')->store('folderForFile');
+        $encode = json_encode($userID);
+        $decode = json_decode($encode, true);
+        $id_string = $decode['$oid'];
 
-        $update = $post->update($request->all());
-        // $update = $post->save();
-
-        if($update){
+        $query = (new chota())->SocialAppMongo->Posts;
+        $check_post = $query->find(['_id' =>  new \MongoDB\BSON\ObjectID($id)]);
+        if ($check_post->toArray() == null) {
             return response([
-                'status'  => 200,
-                'message' => 'Post Updated'
-        ]);
-        }else{
-            return response([
-                'status'  => 404,
-                'message' => 'Post not Updated'
+                'message' => 'Post Not Exits',
             ]);
+        }
+
+        $update_post = $query->findOne(['user_id' => $id_string]);
+        if (isset($update_post)) {
+            $update_fields = [];
+            foreach ($request->all() as $key => $value) {
+                if (in_array($key, ['title', 'description','digital_data'])) {
+                    $update_fields[$key] = $value;
+                    $update_post = $query->updateOne(
+                        ['_id' => new \MongoDB\BSON\ObjectID($id)],
+                        ['$set' => $update_fields]
+                    );
+                    return response([
+                        'Status' => '200',
+                        'message' => 'you have successfully Update Post',
+                    ], 200);
+                }
+            }
+        } else {
+            return response([
+                'Status' => '200',
+                'message' => 'you are Authorize to Update other User Posts',
+            ], 200);
         }
     }
 
@@ -82,12 +119,20 @@ class PostController extends Controller
         $key = 'kk';
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
-        // dd($userID);
-        $post = Post::find($id);
-        // dd($post);
-        $delete = $post->delete();
 
-        if($delete){
+        $query = (new chota())->SocialAppMongo->Posts;
+        $encode     = json_encode($userID);
+        $decode     = json_decode($encode, true);
+        $id_string  = $decode['$oid'];
+        $find_post  = $query->findOne(['user_id' => $id_string]);
+        $check_post = $query->find(['_id' =>  new \MongoDB\BSON\ObjectID($id)]);
+
+        if ($check_post->toArray() == null) {
+            return response([
+                'message' => 'Post Not Exits',
+            ]);
+        }elseif(isset($find_post)){
+            $query->deleteOne(['_id' => new \MongoDB\BSON\ObjectID($id)]);
             return response([
                 'status'  => 200,
                 'message' => 'Post deleted'

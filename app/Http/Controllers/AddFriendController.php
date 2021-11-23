@@ -3,11 +3,9 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use\App\Models\addFriend;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
-// use App\Http\Controllers\AuthController;
-use App\Models\User;
+use MongoDB\Client as chota;
 
 class AddFriendController extends Controller
 {
@@ -19,36 +17,49 @@ class AddFriendController extends Controller
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
         //Query
-        $addFriend = new addFriend;
-        $var = addFriend::all()->where('sender_id', $userID)->where('reciever_id',$request->reciever_id)->first();
-        $var2= addFriend::all()->where('sender_id',$request->reciever_id)->where('reciever_id', $userID)->first();
-        //Send Request To Yourself Check
-        if($userID == $request->reciever_id)
-        {
-            return response([
-                'message' => 'You can not send request to yourself'
-            ]);
-        }
+        $query      = (new chota())->SocialAppMongo->User;
+        $add_Friend = (new chota())->SocialAppMongo->Friends;
+
+        $encode = json_encode($userID);
+        $decode = json_decode($encode, true);
+        $id_string = $decode['$oid'];
+        
         //Reciever Existance Check
-        $checkReciever = User::all()->where('id', $request->reciever_id)->first();
+        $checkReciever = $query->findOne(['_id' => new \MongoDB\BSON\ObjectId($request->reciever_id)]);
         if(!isset($checkReciever)){
             return response([
                 'message' => 'Reciver Does not exist'
             ]);
         }
-        //Send Friend Request
-        if($var==null && $var2==null)
-        {
-            $addFriend->sender_id    = $userID;
-            $addFriend->reciever_id  = $request->reciever_id;
-            $addFriend->status       = $request->status;
-            $create = $addFriend->save();
-            return response([
-                'message' => 'Friend Request Send'
-            ]);
-        }elseif($userID == $request->reciever_id){
+
+        //Already Send Request Check
+        $check_request = $add_Friend->findOne([
+            'sender_id'  => $id_string,
+            'reciver_id' => $request->reciver_id,
+        ]);
+
+        if($id_string == $request->reciever_id){
             return response([
                 'message' => 'cannot send request to yourself'
+            ]);
+        }  
+
+        if(isset($check_request)) {
+            return response([
+                "Message" => "You have already Sent the Friend Request to this User"
+            ]);
+        }
+          
+        //Send Friend Request
+        if (isset($checkReciever)) {
+            $add_Friend->insertOne([
+                'sender_id'   => $id_string,
+                'reciever_id' => $request->reciever_id,
+                'status'      => 0
+            ]);
+
+            return response([
+                "Message" => "You have Successfully Send Friend Request "
             ]);
         }else{
            return response([
@@ -57,30 +68,40 @@ class AddFriendController extends Controller
         }
     }
 
-    public function acceptFriendRequest(Request $request , $id)
+    public function acceptFriendRequest(Request $request)
     {
-        // $friend_Request = addFriend::where('id',$id)->first();
         $jwt = $request->bearerToken();
         $key = 'kk';
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
 
-        $friend_Request = addFriend::all()->where('sender_id',$id)->where('reciever_id',$userID)->first();
-        // dd($friend_Request);
+        $add_Friend = (new chota())->SocialAppMongo->Friends;
+        $encode = json_encode($userID);
+        $decode = json_decode($encode, true);
+        $id_string = $decode['$oid'];
 
-        if($friend_Request->status = null){
+        $check_request = $add_Friend->findOne([
+            'sender_id'  => $request->sender_id,
+            'reciever_id' => $id_string,
+        ]);
+        if(isset($check_request)) {
+            $update = $add_Friend->updateOne(
+                ['_id' => new \MongoDB\BSON\ObjectID($id_string)],
+                ['$set' => [
+                    'status' => 1
+                ]]
+            );
             return response([
-                'message'=>'Friend Request Not Accepted'
+                "Message" => "Friend Request Accepted"
             ]);
-        }elseif ($friend_Request) {
-            $friend_Request->status = '1';
-            $friend_Request->save();
+        }
+        if($check_request->status == '1') {
             return response([
-                'message'=>'Friend Request Accepted'
-            ]);
-        }else{
+                    "Message" => "You are already Friend of this User"
+                ]);
+        } else{
             return response([
-                'message'=>'Error'
+                'message' => 'Error'
             ]);
         }
     }

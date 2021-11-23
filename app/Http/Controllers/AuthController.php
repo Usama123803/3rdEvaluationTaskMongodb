@@ -3,52 +3,92 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
-use App\Models\Token;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\EmailVarify;
+use MongoDB\Client as chota;
+
+// use MongoDB\BSON\ObjectId::__toString;
+use Symfony\Component\Console\Input\Input;
+use Throwable;
 
 class AuthController extends Controller
 {
-    function register(Request $request){
+    function register(Request $request) {
+        
         //Validate data
-        $request->validate([
-            'email' => 'required|string|unique:users',
+        $validator = $request->validate([
+            'email'    => 'required|string',
             'password' => 'required|string'
         ]);
 
-        //Request is valid, create new user
-        $token    = $this->createToken($request->email);
-        $url = 'http://127.0.0.1:8000/api/emailVarification/'.$token.'/'.$request->email;
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => bcrypt($request->password),
-            'url' => $url,
-        ]);
-
-        //Mail Send To Mail Trap Acc
-        Mail::to($request->email)->send(new EmailVarify($user->url));
-        return $user;
-
+        //Connection
+        $query = (new chota())->SocialAppMongo->User;
+        //create a link to varify email.
+        $token = $this->createToken($request->email);
+        $url   = 'http://127.0.0.1:8000/api/emailVarification/'.$token.'/'.$request->email;
+        //Check User Existance
+        $user_exist = $query->findOne(['email' => $request->email]);
+        if(!isset($user_exist)){
+        //create new User in DB
+            $user = $query->insertOne([
+                'name'              => $request->name,
+                'email'             => $request->email,
+                'password'          => bcrypt($request->password),
+                'token'             => $token,
+                'url'               => $url,
+                'email_verified_at' => null,
+            ]);
+            // Mail Send To Mail Trap Acc
+            Mail::to($request->email)->send(new EmailVarify($url));
+            if ($user) {
+                return response([
+                    'message' => 'Link Recieved',
+                ]);
+            } else {
+                return response([
+                    'message' => 'Email Not Sent',
+                ]);
+            }
+        }else{
+            return response([
+                'message' => 'Already registered'
+            ]);
+        }
     }
 
-    function emailVarification($token,$email){
-        // dd($email);
-        $emailVerify = User::where('email',$email)->first();
-        // dd($emailVerify->id);
-        if($emailVerify->email_verified_at != null){
+    function emailVarification($token,$email) {
+
+        $query = (new chota())->SocialAppMongo->User;
+        $emailVerifyOriginal = $query->findOne(['email' => $email]);
+        $emailVerify = $query->findOne(['email' => $email]);
+
+        if ($emailVerify['email'] != $email) {
+            return response([
+                'message' => 'User Does not Exits'
+            ]);
+        }
+
+        $emailVerify = iterator_to_array($emailVerify);
+        if ($emailVerify['token'] != $token) {
+            return response([
+                'message' => 'Un-authorized'
+            ]);
+        }
+
+        if($emailVerifyOriginal->email_verified_at != null){
             return response([
                 'message'=>'Already Verified'
             ]);
-        }elseif ($emailVerify) {
-            $emailVerify->email_verified_at = date('Y-m-d h:i:s');
-            $emailVerify->save();
+        }elseif ($emailVerifyOriginal) {
+            $query->updateOne(
+                ['email' => $email],
+                ['$set'  => ['email_verified_at' => date('Y-m-d h:i:s')]
+            ]);
             return response([
                 'message'=>'Eamil Verified'
             ]);
@@ -62,10 +102,10 @@ class AuthController extends Controller
     function createToken($data) {
         $key = "kk";
         $payload = array(
-            "iss" => "http://127.0.0.1:8000",
-            "aud" => "http://127.0.0.1:8000/api",
-            "iat" => time(),
-            "nbf" => 1357000000,
+            "iss"  => "http://127.0.0.1:8000",
+            "aud"  => "http://127.0.0.1:8000/api",
+            "iat"  => time(),
+            "nbf"  => 1357000000,
             "data" => $data,
         );
         $jwt = JWT::encode($payload, $key, 'HS256');
@@ -73,49 +113,53 @@ class AuthController extends Controller
     }
 
     function login(Request $request) {
-        //Validate data
-        $request->validate([
-            'email' => 'required|string',
-            'password' => 'required|string'
-        ]);
-
-        //Check Eamil
-        $data = [
-            'email'    => $request->email,
-            'password' => $request->password
-        ];
-
-        $user = User::where('email', $request->email)->first();
-        // dd($user);
-        //check if user already has token
-        $var = Token::where('user_id', $user->id)->first();
-
-        if(isset($var)){
-            return response([
-                'message' => 'user already login'
+        try {
+            $request->validate([
+                'email'    => 'required|string',
+                'password' => 'required|string'
             ]);
+
+            //DB Connection
+            $query = (new chota())->SocialAppMongo->User;
+            $user  = $query->findOne(['email' => $request->email]);
+
+            if ($user['email_verified_at'] == null) {
+                return response([
+                    'Status'  => '400',
+                    'message' => 'Bad Request',
+                    'Error'   => 'Please Verify your Email before login'
+                ], 400);
+            } elseif($request->email == $user['email'] and Hash::check($request->password, $user['password'])) {
+
+                // check if user is already login and assigned token 
+                $query = (new chota())->SocialAppMongo->User;
+                $user = $query->findOne(['_id' => $user['_id']]);
+
+                if (isset($user)) {
+                    $new_token = $this->createToken($user->_id); 
+                    $token_add =  $query->updateOne(
+                        ['_id'  => $user['_id']],
+                        ['$set' => ['token' => $new_token]]
+                    );
+                    return response([
+                        'Status'  => '200',
+                        'Message' => 'Successfully Login',
+                        'user_id' => $user->_id,
+                        'Email'   => $request->email,
+                        'token'   => $new_token
+                    ], 200);
+                } else {
+                    return response([
+                        'Status'  => '400',
+                        'message' => 'Bad Request',
+                        'Error'   => 'Un-authorized User'
+                    ], 400);
+                }
+            }
+        } catch (Throwable $e) {
+            return $e->getMessage();
         }
-        //Create User Token
-        if(Auth::attempt($data)) {
-            $token    = $this->createToken($user->id);
-            $var      = Token::create([
-            'user_id' => $user->id,
-            'token'   => $token
-        ]);
-            return response([ 
-                'Status'  => '200',
-                'Message' => 'Successfully Login',
-                'Email'   => $request->email,
-                'token'   => $token
-            ], 200);
-        } else {
-            return response([
-                'Status'  => '400',
-                'message' => 'Bad Request',
-                'Error'   => 'Email or Password does not match'
-            ], 400); 
-        }
-    } 
+    }
 
     function logout(Request $request){
         //Decode Token
@@ -123,17 +167,26 @@ class AuthController extends Controller
         $key = 'kk';
         $decoded = JWT::decode($jwt, new Key($key, 'HS256'));
         $userID = $decoded->data;
+        //DB Connection
+        $query = (new chota())->SocialAppMongo->User;
         //Check If Token Exits
-        $userExist = Token::where("user_id",$userID)->first();
-        if($userExist){
-            $userExist->delete();
-        }else{
+        $encode = json_encode($userID);
+        $decoded = json_decode($encode, true);
+        $id = $decoded['$oid'];
+        $userExist = $query->findOne(['_id' => new \MongoDB\BSON\ObjectID($id)]);
+
+        if($query->findOne(['token' => null])){
             return response([
                 "message" => "This user is already logged out"
             ], 404);
-        }
+        }else{
+            $user = $query->updateOne(
+                ['_id'  => $userExist['_id']],
+                ['$set' => ['token' => null]]
+            );
             return response([
-                "message" => "logout successfull"
+                "message" => "logout successfully"
             ], 200);
+        }
     }
 }

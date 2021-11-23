@@ -40,4 +40,4 @@ Route::post('delete/{id}',[PostController::class,'delete']);
 
 //Add Friend
 Route::post('addFriend',[AddFriendController::class,'addFriend']);
-Route::post('acceptFriendRequest/{id}',[AddFriendController::class,'acceptFriendRequest']);
+Route::post('acceptFriendRequest',[AddFriendController::class,'acceptFriendRequest']);
