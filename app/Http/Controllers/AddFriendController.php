@@ -84,9 +84,14 @@ class AddFriendController extends Controller
             'sender_id'  => $request->sender_id,
             'reciever_id' => $id_string,
         ]);
+        if($check_request->status == '1') {
+            return response([
+                    "Message" => "You are already Friend of this User"
+                ]);
+        }
         if(isset($check_request)) {
             $update = $add_Friend->updateOne(
-                ['_id' => new \MongoDB\BSON\ObjectID($id_string)],
+                ['reciever_id' => $id_string],
                 ['$set' => [
                     'status' => 1
                 ]]
@@ -94,11 +99,6 @@ class AddFriendController extends Controller
             return response([
                 "Message" => "Friend Request Accepted"
             ]);
-        }
-        if($check_request->status == '1') {
-            return response([
-                    "Message" => "You are already Friend of this User"
-                ]);
         } else{
             return response([
                 'message' => 'Error'
